@@ -8,7 +8,7 @@ This repository contains my **Advanced Topics in Statistics** coursework which l
 ```
 data/            # raw data kept local; small processed samples only
 notebooks/       # main .Rmd analysis
-reports/         # figures/outputs; coursework PDF
+reports/         # final coursework PDF along with the assignment brief for context
 ```
 
 ## ⚙️ How to Run (Reproducibility)
@@ -24,7 +24,7 @@ install.packages(c(
 # Knit or run top-to-bottom
 ```
 
-> Data: the data given for the coursework.
+> Data: the data given for the coursework from Exeter University.
 
 ## 📊 Findings (headline bullets)
 - **Bayesian:** posterior summaries separate groups meaningfully; diagnostics (trace/GR) acceptable.  
