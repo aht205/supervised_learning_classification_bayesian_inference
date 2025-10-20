@@ -6,7 +6,7 @@ This repository contains my **Advanced Topics in Statistics** coursework which l
 
 ## 📁 Repo Structure
 ```
-data/            # raw data kept local; small processed samples only
+data/            # data given to complete coursework
 notebooks/       # main .Rmd analysis
 reports/         # final coursework PDF along with the assignment brief for context
 ```
