@@ -18,7 +18,6 @@ data/processed/*.csv
 
 # Outputs
 reports/figures/
-*.pdf
 *.rds
 *.RData
 
