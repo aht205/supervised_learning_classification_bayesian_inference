@@ -1,18 +1,42 @@
-# Bayesian Inference & Classification – Advanced Statistical Methods
+# Bayesian Inference & Supervised Learning (R)
 
-This project contains my **Advanced Topics in Statistics** coursework, demonstrating Bayesian modelling using JAGS and multiple machine learning classification algorithms in R.
+This repository contains my **Advanced Topics in Statistics** coursework which looks at:
+- **Bayesian inference** of reaction times using **R + JAGS (MCMC)**  
+- **Supervised classification** with **KNN, QDA, Random Forest, SVM** (caret)
 
-## 📘 Overview
+## 📁 Repo Structure
+```
+data/            # raw data kept local; small processed samples only
+notebooks/       # main .Rmd analysis
+reports/         # final coursework PDF along with the assignment brief for context
+```
 
-**Part A – Bayesian Inference**
-- Hierarchical model of reaction times for schizophrenic vs. non-schizophrenic individuals.  
-- Implemented in **R + JAGS** using MCMC sampling.  
-- Diagnostics: traceplots, Gelman–Rubin statistic, posterior summaries.  
-- Focus: parameter inference (`beta`, `tau`, `lambda`) and predictive model validation.
+## ⚙️ How to Run (Reproducibility)
 
-**Part B – Classification**
-- Compared **KNN**, **QDA**, **Random Forest**, and **SVM** on a synthetic dataset.  
-- Evaluated models using **Accuracy, Sensitivity, Specificity**, and **AUC**.  
-- Applied **cross-validation** (caret) and visualised **ROC curves** with `plotROC`.
+**R / RStudio**
+```r
+install.packages(c(
+  "ggplot2","dplyr","tidyr","gt","psych","caret","class",
+  "plotROC","MASS","e1071","randomForest","R2jags",
+  "MCMCvis","coda","lattice","kernlab"
+))
+# Open notebooks/supervised_learning_classification_bayesian_inference.Rmd
+# Knit or run top-to-bottom
+```
 
-## 🧩 Repo Structure
+> Data: the data given for the coursework from Exeter University.
+
+## 📊 Findings (headline bullets)
+- **Bayesian:** posterior summaries separate groups meaningfully; diagnostics (trace/GR) acceptable.  
+- **Classification:** KNN/QDA competitive; AUCs ~0.88–0.89 on the provided dataset; RF/SVM comparable.  
+- **Reproducibility:** single `.Rmd` runs end-to-end; dependencies listed above.
+
+## 🧠 Skills Demonstrated
+- Bayesian hierarchical modelling (JAGS)
+- MCMC diagnostics & interpretation
+- Supervised ML methods (KNN, QDA, RF, SVM)
+- Model evaluation (confusion matrices, ROC, AUC)
+- Data wrangling (`tidyverse`) and reproducible reporting (`RMarkdown`)
+
+## 🔑 Keywords
+`R` `RMarkdown` `Bayesian` `JAGS` `MCMC` `caret` `KNN` `QDA` `RandomForest` `SVM` `ROC` `AUC` `statistics`
