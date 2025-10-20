@@ -1,0 +1,17 @@
+# R package dependencies
+ggplot2
+dplyr
+tidyr
+gt
+psych
+caret
+class
+plotROC
+MASS
+e1071
+randomForest
+R2jags
+MCMCvis
+coda
+lattice
+kernlab

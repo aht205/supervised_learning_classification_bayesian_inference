@@ -1,0 +1,27 @@
+# R
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+*.Rproj
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+
+# Data
+data/raw/
+data/processed/*.csv
+!data/processed/README.md
+
+# Outputs
+reports/figures/
+*.pdf
+*.rds
+*.RData
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,1354 @@
+---
+title: "Advanced Topics in Statistics Coursework"
+author: "Adnaan Tyabji"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+\
+
+AI-supported/AI-integrated use is permitted in this assessment. I acknowledge the following uses of GenAI tools in this assessment:
+
+[x]        Other [**Helped to debug code when trying to get the AUC for KNN and SVM models**].
+
+I declare that I have referenced use of GenAI outputs within my assessment in line with the University referencing guidelines.
+\
+\
+
+## A. Bayesian Inference
+\
+
+### 1.\
+
+```{r, message=FALSE}
+# We start by loading in the necessary libraries we might need:
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gt)
+library(psych)
+library(caret) 
+library(class)
+library(plotROC)
+library(MASS)
+library(e1071)
+library(randomForest)
+library(R2jags); library(MCMCvis); library(coda); library(lattice)
+library(kernlab)
+```
+
+```{r}
+# Now reading in the data
+rdf <- read.csv("rtimes.csv")
+
+# Checking the structure
+head(rdf)
+
+# Checking for NA values
+sum(is.na(rdf))
+```
+
+We have a dataset with reaction times for 17 people (first 11 non-schizophrenic and last 6 are schizophrenic). We have 30 reaction times for each person. We will now create histograms to visualise the difference between groups. To do this we will create a new dataframe to make it easier for us to plot using `ggplot`, adding a column to distinguish schizophrenic and non-schizophrenic individuals to group by.
+
+```{r}
+
+# We pivot the dataframe to a long format using tidyr
+
+rdf1 <- rdf %>%
+  # selects all columns starting with t to put into one column
+  pivot_longer(cols = starts_with("T"), 
+               names_to = "Trial", # New column called 'trial' 
+               values_to = "RT") #New column for corresponding reaction time
+
+# creating a new column to categorise schizophrenic or not (1 for schizo)
+rdf2 <- rdf1 %>% 
+  mutate(Schizo = ifelse(X <= 11, 0, 1))
+
+# Checking the new format is correct
+head(rdf2)
+
+```
+We now have the data in our desired format so can go ahead with creating histograms to get a visual comparison of the reaction times of schizophrenic and non-schizophrenic individuals. 
+
+```{r, out.width='100%'}
+# We first create a new dataframe just for plots, making the participant and
+# schizophrenic columns categorical
+rdf3 <- rdf2 %>%
+  mutate(X = as.factor(X)) %>%
+  mutate(Schizo = ifelse(Schizo == 1, 'Schizophrenic', 'Non-Schizophrenic')) %>%
+  mutate(Schizo = as.factor(Schizo))
+
+# We use GGplot to create histograms for each participant, colour coded for
+# schizo vs non-schizo
+rtplot1 <- ggplot(rdf3, aes(x = RT, fill = Schizo)) +
+  geom_histogram(binwidth = 60, alpha = 0.7) +
+  
+  # We use facet_wrap as this keeps all the x axis same
+  facet_wrap(~X, scales = "free_y") + 
+  
+  # Labels for our plot
+  labs(title = 'Reaction Times for Individuals (Non-Schizophrenic vs Schizophrenic)',
+       x = 'Reaction Time (ms)',
+       y = 'Count',
+       fill = 'Group',
+       caption = 'Figure 1: Visual comparison for reaction times of Non-Schizophrenic vs Schizophrenic individuals') +
+  theme_minimal() +
+  # Making the text more readable
+  theme(axis.text.x = element_text(angle = 45, size = 7),
+        plot.caption = element_text(hjust = 0.5)) 
+
+rtplot1
+
+```
+
+\
+We can see from Figure 1 that there seems to be far more variability in reaction times for schizophrenic individuals compared to non-schizophrenics. The groupings of each reaction time test are much closer together for non-schizophrenic individuals, with almost of all the tests being under 500ms and most having very consistent tests within 60ms (with one bar being considerably taller than the others, the binwidth is 60). In fact most non-schizophrenic individuals had over half of their tests fall within a 60ms window. In contrast, the schizophrenic individual's reaction times are far more varied, with times ranging from below 500ms to 1000ms and above for a single subject. A good example showcasing the difference are the histograms of subject 1 (the first histogram) and subject 14, with subject 1 having far more consistent times, all below 500ms while subject 14 has times below 500ms but also had multiple tests over that time, all the way up to reaction times which were over 1500ms. Also most of the non-schizophrenic individuals have right skewed histograms, so most of their reaction times where 'faster' (left) with a few slower times creating the tail, Subject 6 is good example of this. Whereas the histograms for schizophrenic patients don't exhibit this same characteristic, with slower times being more common, meaning less peaks and a flatter histogram profile without as much of a tail, as shown by the histogram of individual 16. Both groups do seem to have their modal times being under 500ms and actually both groups' modal times are quite similar, but the schizophrenic group then has a greater number of slower times, individual 17 is a good example of this, who's most frequent time is similar to individual 2, but then has far more slower times as well. 
+
+\
+
+### 2. \
+
+We will model our data using `JAGS`, but first we will transform it onto a log scale. We do this as it helps reduce some of the skewness of our data as most of the times are on the faster side, a lot of schizophrenic patients then also have a few slower outliers creating right tails. Taking the log will make the data more symmetric and closer to a normal distribution (which is important as the model assumes a normal distribution). Taking the log will reduce the variance of an individual's reaction times (helping to meet the assumption of homoscedasticity assumed by our model) as even within the schizophrenic group there is large differences in variance. Subject 13 has all of their times in a tighter range compared to subject 16 say, so log transforming will help reduce this difference in variance by bringing outliers closer to the center. These outliers will have a disproportional effect on our analysis, making individuals seem slower than they actually are. Subject 17 for example has a mos of their times being within a reasonably fast range but then has one time over 1100 ms, which would pull their average up. Taking the log will help reduce the effect of this outlier, helping make the model coefficient analysis more comparable. As seen in Figure 1, it was the schizophrenic group with these extreme values, likely caused by attention deficit issues, taking the log will help reduce the impact of these results, making comparison between the groups more realistic/accurate. 
+
+We will now see how the log transformation actually effects our data, compared to the non-log format:
+```{r, out.width='100%'}
+# We first create a new df with the log transformed values
+rdf.log <- rdf2 %>%
+  mutate(logRT = log(RT))
+
+# Now we create new dataframe showcasing the standard deviations of the regular
+# data and the log transformed data for each individual
+rdf.sd <- rdf2 %>%
+  group_by(X) %>% # We want the standard deviation of each individual
+  summarise(
+    sd.regular = sd(RT), # sd without the log transformation
+    sd.log = sd(log(RT)) # sd after log transformation
+  )
+
+# Creating a table with the new dataframe
+sd.table <- gt(rdf.sd, rowname_col = 'X') %>%
+  tab_stubhead(label = 'Participant number') %>%
+  tab_header(title = 'Standard Deviations for Individuals, Original vs Log') %>%
+  cols_label(sd.regular = 'Original SD',
+             sd.log = 'SD after log') %>%
+  tab_footnote(footnote = 'Figure 2: Table comparing original standard deviations of subjects vs log transformed values') %>%
+  cols_width(stub() ~ px(100)) %>%
+  fmt_number(columns = c(sd.regular, sd.log), decimals = 3)
+
+sd.table
+  
+```
+\
+
+Figure 2 shows how the standard deviations have been reduced especially for individuals with higher variance to begin with (schizophrenics with more extreme potentially caused by attention deficit issues). In other words their variance has decreased **relative** to individuals with less variance to begin with. For example, subject 14's standard deviation was 10 times more than subject 1's before the log transformation, afterwards it is slightly over 4.5 times. Now even within group variance (which is assumed to be constant in our model) is closer, evidenced by the difference between subject 15 and 12's standard deviations going from almost 9 times to under 4 times. 
+
+
+\
+
+### 3. \ 
+
+Now we have our data transformed, we will list the parameters needed for our model and their corresponding vague prior distributions:
+
+**$\mu$** (`mu` in our model) -  is the mean reaction time for non-schizophrenic individuals on the log scale. We give $\mu$ a uniform distribution and, as we want it to be a vague prior, we give a wide range (negative to positive as $\mu$ is on the log scale):
+
+\[
+\mu \sim Uniform(-100, 100)
+\]
+\
+
+**$\beta$** (`beta`) - additional time taken relative to the non-schizophrenic mean $\mu$ (on the log scale) for schizophrenic individuals, due to motor reflex retardation. We give this a vague uniform prior again by specifying a wide range:
+
+\[
+\beta \sim Uniform(-100, 100)
+\]
+\
+
+**$\sigma_y$** (`sigma.y`) - standard deviation of the reaction times. Given a wide range but of course needs to be positive:
+
+\[
+\sigma_y \sim Uniform(0, 100)
+\]
+\
+
+**$\sigma_\alpha$** (`sigma.alpha`) - is the standard deviation of the person specific means ($\alpha_i$). This needs to be positive and vague so we give it a uniform distribution in the positive range and very wide:
+
+\[
+\sigma_\alpha \sim Uniform(0, 100)
+\]
+\
+
+**$\tau$** (`tau`) - the amount of time (on the log scale) response is delayed if a schizophrenic's test is affected by attention deficit on their part. This has been restricted to be positive to make sure the model is identifiable. Also as $\tau$ represents a delay in reaction, or increase in reaction time, negative $\tau$ would be a decrease in reaction time which doesn't make sense in this context. Again given a wide range (on the log scale, keeping in mind it will be exp) to keep it a *vague* prior. $\tau$ likely to be smaller than 1 as after we transform back the affect of $\tau$ would be multiplicative such that it would be $\times e^\tau$ so upper bound can be lower and still be vague:
+
+\[
+\tau \sim Uniform(0, 10)
+\]
+\
+
+**$\lambda$** (`lambda`) - probability the response time of a schizophrenic's test is delayed (due to attention deficit). As this is a probability, the vaguest uniform prior possible is between 0 and 1:
+
+\[
+\lambda \sim Uniform(0, 1)
+\]
+\
+
+### 4. \
+
+Now we have our priors for all of our parameters, we can fit our model using `JAGS`. We first create the data lists to use when we fit the model. 
+
+```{r}
+# Creating 2 new df for schizophrenic and non-schizophrenic individuals, after
+# log transforming the times of our original df
+rdf.log2 <- rdf
+rdf.log2[, 2:31] <- log(rdf[, 2:31])
+
+# This is the data for our model
+y.ns <- rdf.log2[1:11, 2:31] # non-schizo df
+y.s <- rdf.log2[12:17, 2:31] # schizophrenic df
+
+# Combining the dfs to create DATA LIST for JAGS 
+jags.data <- list("y.ns", "y.s")
+```
+
+Now we have our data we can set up our `JAGS` model:
+
+```{r}
+# We now set up our JAGS model
+jags.model <- function(){
+  # reaction time of non-schizophrenics
+  for (i in 1:11) {
+    for (j in 1:30) {
+      y.ns[i,j] ~ dnorm(alpha.ns[i], p.y)
+    }
+    alpha.ns[i] ~ dnorm(mu, p.alpha)
+  }
+
+  # reaction time of schizophrenics
+  for (i in 1:6){
+    for(j in 1:30){
+      
+    # avg. time for schizo is trial dependent due to the delay factor
+      alpha2.s[i,j] <- alpha.s[i] + tau * z[i,j] # Defining the inputs first
+      z[i,j] ~ dbern(lambda)
+      y.s[i,j] ~ dnorm(alpha2.s[i,j], p.y)
+    }
+    alpha.s[i] ~ dnorm(mu.s, p.alpha)
+  }
+  mu.s <- mu + beta
+  
+  # priors
+  mu ~ dunif(-100, 100)
+  beta ~ dunif(-100, 100)
+  sigma.y ~ dunif(0, 100)
+  sigma.alpha ~ dunif(0, 100)
+  tau ~ dunif(0, 10)
+  lambda ~ dunif(0, 1)
+  
+  # setting the precision for the normal distributions
+  p.y <- 1/(sigma.y^2)
+  p.alpha <- 1/(sigma.alpha^2)
+}
+```
+
+We now create a list for the parameters we would like to monitor when fitting our model. Although we are looking at group level effects of motor retardation (reflected by `beta`) and attention deficit (`tau`), we will still monitor `alpha.s` as we might need the posteriors for prediction. Also from our histograms, there was significant variability within the schizophrenic group (individual 12 compared to 17 for example), so monitoring this node could provide some insight on this. 
+
+```{r}
+# setting the parameters we would like to monitor
+jags.param <- c("mu", "beta", "sigma.y", "sigma.alpha", "tau", "lambda",                      "alpha.s")
+```
+
+Now we need to set initial values. We will get summary statistics from our 2 dataframes `y.ns` and `y.s` to get a rough idea for suitable values, we use the `psych` package to get these as this package allows you to extract these quite simply:
+
+```{r}
+# describe function from psych provides statistics such as mean, sd, max values
+# etc from each column. Saved as a new df 
+y.ns.psyc <- describe(y.ns)
+y.s.psyc <- describe(y.s)
+
+# colMeans allows us to get the average values for each of the statistics (only for the specific stats we want)
+
+# Summary stats for non-schizophrenic individuals
+colMeans(y.ns.psyc[, c("mean", "sd", "min", "max", "range")]) 
+
+# Summary stats for schizophrenic individuals
+colMeans(y.s.psyc[, c("mean", "sd", "min", "max", "range")]) 
+
+```
+
+Now we have these statistics, we have a general idea of what suitable initial values should be. Unsurprisingly these statistics re-enforce the information given in the model. We will use 3 chains (as we are going to thin our samples reduce correlation so having an extra chains gives us some more samples back) all with different starting values to assess convergence. 
+
+```{r, message=FALSE}
+# We set initial values for all stochastic nodes. We will use 3 chains to so we
+# can get more samples (given our burnin of 5000, we will discard 50% of our
+# total samples) and more robust convergence diagnostics. 
+
+# We try to set distinct starting values that are still reasonable so we can 
+# test convergence while still reaching it.
+
+set.seed(123) # We have to set seeds as we sample for our z value
+inits1 <- list(
+  mu = 4.5, beta = 0.2, sigma.y = 0.1, sigma.alpha = 0.1, tau = 0.3, 
+  lambda = 0.05, alpha.ns = seq(5.3, 5.4, length.out = 11),
+  alpha.s = seq(5.4, 5.5, length.out = 6), 
+  z = matrix(rbinom(180, 1, 0.05), 6, 30))
+
+set.seed(456)
+inits2 <- list(
+  mu = 5.5, beta = 0.4, sigma.y = 0.2, sigma.alpha = 0.2, tau = 0.65, 
+  lambda = 0.15, alpha.ns = seq(5.6, 5.75, length.out = 11),
+  alpha.s = seq(5.7, 5.8, length.out = 6), 
+  z = matrix(rbinom(180, 1, 0.1), 6, 30))
+
+set.seed(789)
+inits3 <- list(
+  mu = 6.5, beta = 0.6, sigma.y = 0.35, sigma.alpha = 0.35, tau = 0.9,
+  lambda = 0.25, alpha.ns = seq(5.9, 6, length.out = 11),
+  alpha.s = seq(6, 6.1, length.out = 6), 
+  z = matrix(rbinom(180, 1, 0.2), 6, 30))
+
+# Saving these as a list to pass to JAGS
+jags.inits <- list(inits1, inits2, inits3)
+```
+
+We now have all the components to fit our `JAGS` model. 
+
+```{r, message=FALSE}
+# Now we fit our JAGS model using the data, parameters and initial values
+jags.mod.fit.schiz <- jags(data = jags.data, inits = jags.inits,
+                           parameters.to.save = jags.param, 
+                           n.chains = 3, # 3 chains improves convergence check
+                           n.iter = 10000, 
+                           DIC = FALSE,
+                           n.burnin = 5000, # as specified by the question
+                           n.thin=3, # 3 so less chance of correlated samples
+                           model.file = jags.model)
+
+# Print a summary of the model outputs
+print(jags.mod.fit.schiz)
+```
+\
+
+### 5. \
+
+Now we have our fitted model, we need to check for convergence. To do this we will first do a 'visual inspection' of the traceplots to make sure there is good mixing between the chains and that they 'wiggle' around a stable value. We will then look at the Gelman-Rubin diagnostic (which quantifies difference between inter-chain variability and within chain variability). 
+
+
+```{r, out.width='100%'}
+# We first convert our fitted model to an mcmc object
+jagsfit.mcmc.schiz <- as.mcmc(jags.mod.fit.schiz)
+
+# Produce traceplots for all of our monitored parameters to check convergence
+MCMCtrace(jagsfit.mcmc.schiz,type ='trace',ind = TRUE, pdf = FALSE)
+
+```
+
+<center>
+*Figure 3: Traceplots of all our monitored nodes to check convergence*
+</center>
+\
+As we can see in figure 3, there is good mixing between all 3 chains in every traceplot for each parameter. We see random scatter (wiggling) around a stable value with none of the 3 chains being distinguishable, no patterns. As this is the same for every parameter, our traceplots have certainly passed they visual test. But we now want to quantify convergence.  
+
+We therefore find the Gelman-Rubin statistic for each paramater. As stated before, this statistic compares between-chain variance to within-chain variance. We look at the upper confidence interval of the statistic, so even in the worst case, have chains converged. If chains have truly converged then we would expect a value of 1 ideally, suggesting there is no significant difference between chains as they have reached a stationary distribution, but anything below 1.05 we can say has successfully converged. 
+
+```{r}
+# Extracting GR statistic
+gelman.diag(jagsfit.mcmc.schiz)
+
+```
+As we can see our 'Upper C.I.' values for all of our scale reduction factors are 1 suggesting that our chains have fully converged. With the fact that are traceplots looked well mixed and stable, along with our Gelman-Rubin statistics being 1, we can conclude there is strong evidence that there all of our parameter MCMC chains have converged. 
+
+\
+
+### 6. \
+
+As the primary interest to psychologists lies in the parameters $\beta$ (looking at the effect of motor retardation for schizophrenics), $\lambda$ (the probability of delay caused by attention deficit) and $\tau$ (the amount of time response is delayed by attention deficit), we will plot the posterior distributions and produce numerical summaries, converting them to their orignal scale to make the results more interpretable. 
+
+We begin with checking whether we have enough samples for posterior inference in the first place. The more samples we have the more accurate our posterior estimates become. To check we have enough samples, we look at the Monte Carlo standard error (MC error). The MC error is the standard error of the posterior sample mean, as an estimate of the theoretical expectation for a given parameter. In simple terms, the MC error tells us the uncertainty around the mean of the posterior distribution based on the fitted samples. It depends on the true variance of the posterior distribution, number of MCMC iterations and the autocorrelation in the MCMC sample (which we have mitigated by using `n.thin = 3`). If we have enough samples for inference, we look for our MC error to be smaller than 5% of the posterior standard deviation. We use the summary function with the MCMC object to find the MC error (given by the `time-series SE` column).
+
+```{r, out.width='100%'}
+# Saving the summary so we can extract just the parameters of interest
+schiz.summary <- summary(jagsfit.mcmc.schiz)
+
+# Extracting the statistics element from the summary
+params.summary.stats <- as.data.frame(schiz.summary$statistics)
+
+# Dividing the time-series SE by SD to check whether it's 5%
+params.summary.stats <- params.summary.stats %>% 
+  mutate(`MC Error (% of SD)` = round((`Time-series SE` / SD)*100, 2))
+
+# Printing only the parameters we want
+print(params.summary.stats[c("beta", "lambda", "tau"), ])
+```
+<center>
+*Figure 4: Numerical summaries and MC error of parameters of interest*
+</center>
+\
+
+We can see that our MC errors for each of the parameters of interest is less than 5% so we can conclude we have enough samples for inference. We also can see numerical summaries of our parameters' means and standard deviations (on the log scale). We can now plot the posterior distributions for these parameters. 
+
+```{r, out.width='100%'}
+# Producing density plots of the posterior distributions
+MCMCtrace(jagsfit.mcmc.schiz,
+params=c('beta', 'lambda', 'tau'),
+type ='density',
+ind = TRUE, ISB = FALSE,
+exact=FALSE,pdf = FALSE)
+
+```
+<center>
+*Figure 5: Posterior distributions of parameters of interest*
+</center>
+\
+Our posterior distributions all look normal, with each chain landing on a very similar stationary distribution.  
+
+We now will extract the median and 95% confidence intervals for our parameters, exponentiating to get the original scale.
+
+```{r, out.width='100%'}
+# Extracting the position of the parameters of interest
+pos <- substr(rownames(jags.mod.fit.schiz$BUGSoutput$summary),1,2)%in%
+  c('ta', 'be', 'la')
+
+# Extracting param names for our table
+param_names <- rownames(jags.mod.fit.schiz$BUGSoutput$summary)[pos]
+
+# extract posterior median for params
+md <- jags.mod.fit.schiz$BUGSoutput$summary[pos,5]
+# extract 2.5 percentile of the posterior
+lcr <- jags.mod.fit.schiz$BUGSoutput$summary[pos,3]
+# extract 97.5 percentile of the posterior
+ucr <- jags.mod.fit.schiz$BUGSoutput$summary[pos,7]
+
+# Saving in a new df
+params.df <- data.frame(parameter=param_names, median=md,lower=lcr,upper=ucr)
+
+# Exponentiation beta and tau
+params.df[c(1,3), -1] <- exp(params.df[c(1,3), -1])
+
+# Putting the values into a table
+params.table <- gt(params.df) %>%
+  tab_header(title = 'Parameter Values') %>%
+  cols_label(parameter= 'Parameter',
+             median = 'Median',
+             lower = '2.5 Percentile',
+             upper = '97.5 Percentile') %>%
+  tab_footnote(footnote = 'Figure 6: Median and 95% CI of Parameters on their original scale') %>%
+  fmt_number(columns = c(median, lower, upper), decimals = 3) %>%
+ tab_style(style = cell_text(weight = "bold"), 
+           locations = cells_column_labels()) %>%
+  tab_style(style = cell_text(weight = "bold"), 
+            cells_title(groups = 'title'))
+
+params.table
+```
+\
+From figure 6 we can see that none of the confidence intervals for any of the parameters contain 0, suggesting that there is clear and significant differences in the reaction times of schizophrenic individuals compared to non-schizophrenics (beta) and also that the delay caused by attention deficit is also substantial.  
+
+In fact the median value of (1.372) suggests that the motor retardation of schizophrenic subjects means their baseline is 1.372 times slower than non-schizophrenics (multiplicative on original scale as it was additive on log scale).
+
+The values for tau suggest that the effect of attention deficit causes a significant delay in reaction times for schizophrenic individuals, with even the lower bound of the CI being above 2, suggesting that it is very likely that attention deficit (when it occurs) causes schizophrenic reaction times to be over twice as slow as their normal times. 
+
+Our lambda value tells us how likely it is for a schizophrenic patient to suffer from attention deficit. With the median being 0.119, it seems that on around 12% of the trials they suffered from this factor which affected their times. 
+\
+
+
+### 7. 
+#### (a) \
+Now we will use prediction to check the fit of the model. We start by updating our original model so that 30 extra response times are predicted for each schizophrenic individual. 
+
+```{r}
+# our original jags.model's non-schizo part remains the same. 
+jags.model.pred <- function(){
+  # reaction time of non-schizophrenics
+  for (i in 1:11) {
+    for (j in 1:30) {
+      y.ns[i,j] ~ dnorm(alpha.ns[i], p.y)
+    }
+    alpha.ns[i] ~ dnorm(mu, p.alpha)
+  }
+
+  # reaction time of schizophrenics
+  for (i in 1:6){
+    for(j in 1:30){
+    # avg. time for schizo is trial dependent due to the delay factor
+      alpha2.s[i,j] <- alpha.s[i] + tau * z[i,j] # Defining the inputs first
+      z[i,j] ~ dbern(lambda)
+      y.s[i,j] ~ dnorm(alpha2.s[i,j], p.y)
+
+      # ADDING THE PREDICTION NODES
+      ## node to predict new z[i,j]s to keep prediction independent
+      z.pred[i,j] ~ dbern(lambda)
+      
+      # adding alpha node with new z.pred values, using alpha.s posterior 
+      alpha2.s.pred[i,j] <- alpha.s[i] + tau * z.pred[i,j]
+      
+      # setting up the actual prediction node
+      y.s.pred[i,j] ~ dnorm(alpha2.s.pred[i,j], p.y)
+    }
+    alpha.s[i] ~ dnorm(mu.s, p.alpha)
+  }
+  mu.s <- mu + beta
+  
+  # priors
+  mu ~ dunif(-100, 100)
+  beta ~ dunif(-100, 100)
+  sigma.y ~ dunif(0, 100)
+  sigma.alpha ~ dunif(0, 100)
+  tau ~ dunif(0, 10)
+  lambda ~ dunif(0, 1)
+  
+  # setting the precision for the normal distributions
+  p.y <- 1/(sigma.y^2)
+  p.alpha <- 1/(sigma.alpha^2)
+}
+
+```
+
+\ 
+
+#### (b) \
+Now we will add nodes to find the standard deviation of the 30 predicted measurements and to get the minimum and maximum values of these 6 standard deviations. 
+
+```{r}
+# our original jags.model's non-schizo part remains the same. 
+jags.model.pred <- function(){
+  # reaction time of non-schizophrenics
+  for (i in 1:11) {
+    for (j in 1:30) {
+      y.ns[i,j] ~ dnorm(alpha.ns[i], p.y)
+    }
+    alpha.ns[i] ~ dnorm(mu, p.alpha)
+  }
+
+  # reaction time of schizophrenics
+  for (i in 1:6){
+    for(j in 1:30){
+    # avg. time for schizo is trial dependent due to the delay factor
+      alpha2.s[i,j] <- alpha.s[i] + tau * z[i,j] # Defining the inputs first
+      z[i,j] ~ dbern(lambda) 
+      y.s[i,j] ~ dnorm(alpha2.s[i,j], p.y)
+
+      # PREDICTION NODES
+      ## node to predict new z[i,j]s to keep prediction independent
+      z.pred[i,j] ~ dbern(lambda)
+      
+      # adding alpha node with new z.pred values, using alpha.s posterior 
+      alpha2.s.pred[i,j] <- alpha.s[i] + tau * z.pred[i,j]
+      
+      # setting up the actual prediction node
+      y.s.pred[i,j] ~ dnorm(alpha2.s.pred[i,j], p.y)
+    }
+    alpha.s[i] ~ dnorm(mu.s, p.alpha)
+  }
+  mu.s <- mu + beta
+  
+  # ADDING NODE FOR STANDARD DEVIATION FOR PREDICTED VALUES
+  for (i in 1:6){
+    pred.sd[i] <- sd(y.s.pred[i, 1:30])
+  }
+  # Getting the minimum and maximum sd's out of the 6 values
+  sd.min <- min(pred.sd[1:6]) # minimum sd
+  sd.max <- max(pred.sd[1:6])
+  
+  # priors
+  mu ~ dunif(-100, 100)
+  beta ~ dunif(-100, 100)
+  sigma.y ~ dunif(0, 100)
+  sigma.alpha ~ dunif(0, 100)
+  tau ~ dunif(0, 10)
+  lambda ~ dunif(0, 1)
+  
+  # setting the precision for the normal distributions
+  p.y <- 1/(sigma.y^2)
+  p.alpha <- 1/(sigma.alpha^2)
+}
+
+
+```
+\
+
+
+#### (c) \
+
+Now we have our final model definition with the required nodes for prediction and sd checking, we can go ahead and fit our model. We will first need to set extra initial values for the new stochastic nodes, `z.pred` and `y.s.pred`. 
+
+``` {r}
+# Adding initial values onto our original lists
+# Matrix for y.s.pred as thats what JAGS expects (as its [i,j])
+inits1.2 <- c(inits1,
+      list(z.pred = matrix(rbinom(180, 1, 0.05), 6, 30),
+      y.s.pred = matrix(rep(seq(5.6, 5.7, length.out = 6), each = 30), 6, 30)))
+
+inits2.2 <- c(inits2,
+      list(z.pred = matrix(rbinom(180, 1, 0.1), 6, 30),
+      y.s.pred = matrix(rep(seq(6, 6.1, length.out = 6), each = 30), 6, 30)))
+
+inits3.2 <- c(inits3,
+      list(z.pred = matrix(rbinom(180, 1, 0.2), 6, 30),
+      y.s.pred = matrix(rep(seq(6.4, 6.6, length.out = 6), each = 30), 6, 30)))
+
+# New initial list for JAGS including the prediction nodes
+jags.inits2 <- list(inits1.2, inits2.2, inits3.2)
+```
+
+We also need to create a new list of parameters we would like `JAGS` to monitor. As we have already fitted the model, we are only interested in the new prediction and sd nodes. 
+
+```{r}
+# Saving only the standard deviation parameters as these are what we will 
+# need for the next section
+jags.param2 <- c("pred.sd", "sd.min", "sd.max")
+
+```
+
+Now we can fit our new model, with 6000 iterations and 5000 burnin. 
+
+```{r, message=FALSE}
+jags.mod.fit.pred <- jags(data = jags.data, inits = jags.inits2,
+                           parameters.to.save = jags.param2, 
+                           n.chains = 3, 
+                           n.iter = 6000, 
+                           DIC = FALSE,
+                           n.burnin = 5000, # as specified by the question
+                           n.thin=1, # reduced to 1 as we have fewer samples
+                           model.file = jags.model.pred)
+
+print(jags.mod.fit.pred)
+```
+
+\
+
+#### (d) \ 
+
+Now we have the minimum and maximum standard deviation pairs from our model, we can extract them, then plot them onto a scatter plot and compare these to the raw standard deviation estimates from earlier. 
+
+```{r, out.width='100%', message=FALSE}
+# Extracting the simulated samples from our model 
+sd.min <- jags.mod.fit.pred$BUGSoutput$sims.list$sd.min
+sd.max <- jags.mod.fit.pred$BUGSoutput$sims.list$sd.max
+
+# Combining the min max pairs into a new df
+sd.df <- data.frame(sd.min = sd.min, sd.max = sd.max)
+
+# Getting the min max pair of the raw SD from question 2
+# Getting the log sd values for only the schizophrenic patients
+raw.sd <- rdf.sd[12:17, 3]
+
+# Getting the min max values
+raw.sd.min <- min(raw.sd)
+raw.sd.max <- max(raw.sd)
+
+# Plotting using ggplot
+ggplot(sd.df, aes(x = sd.min, y = sd.max)) + # simulated sample min-max pairs
+  geom_point(alpha = 0.2) + 
+  # adding the raw min max pair, formatting it so it's clear
+  annotate("point", x = raw.sd.min, y = raw.sd.max, color = "red", size = 1.5) +
+  annotate("text", x = raw.sd.min, y = raw.sd.max, 
+           label = "Raw SD Min-Max", color = "black", vjust = 3, hjust = 0.35, 
+           size = 2) + 
+  labs(
+    x = "Minimum SD (Smin)",
+    y = "Maximum SD (Smax)",
+    title = "Posterior Samples of (Smin, Smax)",
+    caption = "Figure 7: Simulated standard deviation min-max pairings vs Raw"
+  ) +
+  theme_minimal() +
+  theme(plot.caption = element_text(hjust = 0.5))
+```
+\
+So we can see in Figure 7 that our model does not accurately capture the variation in the within person response times for schizophrenic patients. The fact that the observed min-max SD pair (red point) falls noticeably outside the main cluster suggests our model greatly underestimates the variability in within-person reaction times. Our model assumes constant variance for reaction times (due to the normal distribution) and that the variance for schizophrenic and non-schizophrenic individuals is the same, these clearly do not hold in this case. 
+
+This is likely due to the fact that individual 12 and 13 from the experiment had very low variation in their reaction times with very tight grouping. In fact subject 12 had the lowest standard deviation out of any of the participants, schizophrenic or not. These individuals had relatively fast reaction times with no outliers, so were seemingly unaffected (or at least far less affected) by motor retardation or attention deficit (looking at their histograms). Our model can not account for the fact that some schizophrenics do not suffer from these issues at all or the magnitude that they suffer from them is based on the individual, as beta ($\beta$) and tau ($\tau$) are calculated on a group level (same values for the entire schizophrenic group).
+
+Then we also have individuals with far greater variability than our model accounts for, subjects 14 and 15 for example, who's times range from relatively fast to the slowest times recorded, suggesting that actually the effect of attention deficit is far greater for some individuals than our model accounts for. 
+
+To improve our model it would make sense to set a different variance structure for schizophrenic and non-schizophrenic individuals. It also seems that the effects of motor retardation and attention deficit on schizophrenic individuals varies greatly, it is not reasonable to have them as fixed group-level parameters. Allowing for this heterogeneity in beta and tau, predicting them on an individual level rather than group level, would greatly improve the ability for our model to capture within group variability.  
+
+\
+\
+
+
+## B. Classification
+\
+
+### 1. \
+
+We now move onto classification. We are given a dataset with two explanatory variables and two response groups. The dataset has 1000 datapoints, we will investigate a method to classify the datapoints into the 2 groups. 
+
+We begin by loading in the dataset and checking its structure. 
+
+```{r}
+# Reading in the dataset to R
+class.df <- read.csv("Classification.csv")
+
+# Checking data columns and structure
+head(class.df)
+
+```
+Notice the 'Group' column is an integer, we will change this to categorical just for ease of use going forward. 
+
+```{r}
+# Converting group column to a categorical
+class.df$Group <- as.factor(class.df$Group)
+
+# Getting a quick summary of the dataset
+summary(class.df)
+
+```
+Here we have a quick summary of our data, there are over twice as many group 1 observations as there are group 0, which we need to keep in mind when setting up and evaluating our classification model performance. A model that indiscriminately assigns all observations into group 1 would be correct 68% of the time. 
+
+Now we move onto finding some more meaningful summaries for the 2 groups.
+```{r, out.width='100'}
+# We use dplyr to get our summary statistics this time
+class.summary <- class.df[, -1] %>%
+  group_by(Group) %>%
+  summarise_all(list(mean = mean, sd = sd, min = min, max = max)) %>%
+   mutate(
+    X1_lower = X1_mean - 3 * X1_sd,
+    X1_upper = X1_mean + 3 * X1_sd,
+    X2_lower = X2_mean - 3 * X2_sd,
+    X2_upper = X2_mean + 3 * X2_sd
+  )
+
+# Creating a table with the new dataframe
+class.table <- gt(class.summary, rowname_col = 'Group') %>%
+  tab_stubhead(label = 'Group') %>%
+  tab_header(title = 'Summary statistics for X1 and X2') %>%
+  cols_label(X1_mean = 'X1 Mean',
+             X2_mean = 'X2 Mean',
+             X1_sd = 'X1 SD',
+             X2_sd = 'X2 SD',
+             X1_min = 'X1 Min',
+             X2_min = 'X2 Min',
+             X1_max = 'X1 Max',
+             X2_max = 'X2 Max',
+             X1_lower = 'Mean - 3 standard deviations (X1)',
+             X2_lower = 'Mean - 3 standard deviations (X2)',
+             X1_upper = 'Mean + 3 standard deviations (X1)',
+             X2_upper = 'Mean + 3 standard deviations (X2)') %>%
+  tab_footnote(footnote = 'Figure 8: Summary statistics for X1 and X2 for each group') %>%
+  cols_width(stub() ~ px(100)) %>%
+  fmt_number(columns = -Group, decimals = 2) %>%
+  tab_style(style = cell_text(weight = "bold"), 
+           locations = cells_column_labels()) %>%
+  tab_style(style = cell_text(weight = "bold"), 
+            cells_title(groups = 'title')) %>%
+  tab_style(style = cell_text(weight = "bold"),
+            locations = cells_stub()) %>%
+  tab_style(style = cell_text(weight = "bold"),
+            locations = cells_stubhead())
+
+class.table
+
+```
+\
+
+From figure 8 we can see that both groups (0 and 1) are clearly distinct, with noticeably different mean values for X1 and X2. The range for group 1 is also far greater than that of group 0, in both X1 and X2. More importantly the standard deviations for the 2 groups are noticeably different for X1, but similar for X2. These factors suggest that the groups do not have the same covariance. We also have columns for the mean for each variable $\pm$ 3 time standard deviation. This is a very crude (and rough) way of checking that the predictors are approximately normal as all the minimum/maximum values fall within or very close to the $\pm$ 3 standard deviation range (for a normal distribution, 99.7% of our values should be within this range). Also, the fact we have 1000 observations and 2 explanatory variables suggest we have plenty training observations to not affect any of our classification methods negatively (negating issues such as overfitting).  
+
+Using our summaries and the plot, the methods most suitable for classification would be Quadratic Discriminant Analysis (**QDA**), K-nearest Neighbour (**KNN**), Support Vector Machines (**SVM**) and Random Forests (**RF**). 
+
+The reason QDA is suitable is due to the fact that our summaries show that X1 and X2 are approximately normal but with different covariance matrices. This along with the plot suggesting that the decision boundary (the boundary between the 2 groups on the plot) is certainly non-linear and looks roughly quadratic means that the assumptions for QDA are met, therefore it would be a viable method of classifying this data. 
+
+The arguments for using KNN to classify this dataset is that KNN is not parameter dependent, therefore as long as we have enough observations, it can be a viable method for classifying our data, regardless of covariance structures. As there seems to be significant overlap in the plot, KNN with the correct choice of K (found via k-fold cross validation), can account for this higher level of complexity. 
+
+RF is also suitable as it can deal with non-linear, overlapping structures as seen in our data as it uses multiple decision trees and aggregates the results. Also as in this case the data is generated from a arbitrary function of X1 and X2, we don't need our results to be easily interpretable, which can sometimes be an issue for RF classification. 
+
+SVM could also be used for this particular classification problem as through the correct choice of kernel and tuning hyper-parameters, the non-linear and overlapping structure of the groups could still be reasonably separated. 
+
+Linear Discriminant Analysis (LDA) would not be appropriate for this particular dataset as although the normality assumption holds, the clear difference in variance between the 2 groups and the non-linear boundary in the plot violate the assumptions required for LDA (LDA assumes common covariance between groups) to be suitable. 
+\
+
+
+### 2. \
+
+We now have a rough idea of what our data looks like and which classification methods might be suitable to use, we can go ahead and fit the models check this ourselves. We first will split our data into training set and a test set we can use to evaluate model performance. To do this we use the `createDataPartition` function from the `caret` package. We split the data based on the group column (4th column) as we want our test and training sets to have the same proportions of group 1 and 0 as our full set has. 
+
+```{r}
+# Split test/train
+set.seed(12345) # for reproducibility
+ii <- createDataPartition(class.df[, 4], p=.75, list=F) ## returns indices for train data
+
+# split the data using the indices returned by the createDataPartition function
+xTrain <- class.df[ii, 2:3] # predictors for training
+yTrain <- class.df[ii, 4] # class label for training
+xTest <- class.df[-ii, 2:3] # predictors for testing
+yTest <- class.df[-ii, 4] # class label for testing
+
+# swapping the factor levels so 1 is the positive class (making sensitivity and specificity more clear/ as is general practice)
+# Had to set labels so the predict probability would work later on in the code
+yTrain <- factor(yTrain, levels = c("1", "0"), labels = c("Group1", "Group0"))
+yTest <- factor(yTest, levels = c("1", "0"), labels = c("Group1", "Group0"))
+
+
+# check the dimensions 
+dim(xTrain)
+dim(xTest)
+length(yTrain)
+head(xTrain)
+```
+
+The dimensions for our training and test sets look good so we can now move onto model set up and evaluation. 
+
+\
+
+### 3. \
+
+We now will use **KNN**, **QDA**, **SV** and **RF** models to classify the data and evaluate each model. Before we do this we need to explain a few concepts vital to performance testing and the main evaluation criteria/metrics we will be using:
+
+* **Bias** - this is the error introduced by representing complex relationships by a model which is unable to account for all the complexities affecting an outcome. The more flexibility/complexity a model is, the less bias it will tend to have, whereas a model which is too simplistic to capture the behaviour in the data will have high bias. 
+* **Variance** - represents the amount our decision boundaries and classification predictions would change if we estimated using a different dataset. How sensitive is our model to changes in the dataset. We would want our model to not vary too greatly, regardless of new data, as this suggests the model captures the underlying behaviour of our data rather than representing the specific noise of one specific training set. A low variance suggests robustness to changes in the training data. 
+
+There is always a trade off between bias and variance, a model which captures the relationship of a particular training set extremely well, and therefore has low bias, will likely have high variance as although the model is very well suited to a particular set of values, it does not reflect the overall relationship very well. This scenario is called over-fitting. We will be looking for our models to ideally have low bias and variance, but as described this may not always be the case so we will be looking to balance this trade off as best as possible. 
+
+The metrics we will use for model evaluations are below: 
+
+* **Error rate** - the proportion of test observations our model classified incorrectly out of all observations. This metric can be quite misleading, especially in our case where there are far more group 1 observations as there are group 0, twice as many in fact so if our classifier guesses group 1 for every observation (regardless of X1 and X2) it will be correct over 68% of the time. 
+* **Accuracy** - the proportion of test observations our model classified correctly (1 - error rate). Suffers from the same issue as the error rate. 
+
+The accuracy (and error rate) are not actually all that useful due to the issues mentioned. Therefore we will use further class specific metrics to evaluate model performance.
+
+For the 4 metrics below we will create confusion matrices for each model which will allow us to calculate them. A confusion matrix is a matrix where the rows represent the number of observations in a class predicted by our model and each column represents the number of observations in an actual class. We have only two groups in our data set (group 0 and group 1), we will assign group 0 as negative and group 1 as positive, this is only to match common classification practices. If an observation is classified as "positive" by our model and its actual class is "positive" then we call this a **True Positive**, if our model classifies an observation to be "positive" and its true class is "negative" then we call this a **False Positive**, its been falsely classified as positive. This works exactly the same for negative classification, a correct negative classification is **True Negative** and if our model classifies an observation as "negative" when its true class is "positive", this is a **False Negative** (falsely classified as negative). 
+
+* **Sensitivity** (recall) - proportion of true positives classified by our model (Group 1 in our scenario) out of total actual positives in the training set (true positive + false negative). Sensitivity is important when missing a true positive could have significant impacts (e.g medical diagnosis). 
+* **Specificity** - the proportion of true negatives (group 0) out of the total number of actual group 0 observations in the test set (true negatives + false positives). 
+
+Note: there is always a tradeoff between sensitivity and specificity, so based on the real world situation, one might be a more important than the other. As we have no context for what either group 1 or group 0 are, we will be looking to balance sensitivity and specificity as best we can.  
+
+* **Positive Predictive Value** (precision) - proportion of true positives out of all positive observations classified by our model. 
+* **Negative Predictive Value** - proportion of true negatives out of all the negative classifications by our model.
+
+We will mainly be using the sensitivity and specificity however the  precision and Negative Prediction value may be useful in some scenarios. 
+
+Finally we will also use Receiver Operating Characteristic (**ROC**) curve plots, which plots the the sensitivity (hit rate) against 1 - specificity (false alarm rate AKA false positive rate) for a range of classification thresholds. The curve represents the trade off between correctly identifying positives and miss-classifying  negatives. We can then use the Area Under the Curve (**AUC**) which measures overall performance of the classifier across all possible thresholds. The larger the AUC, the better, with an AUC = 1 suggesting our model has a perfect ability to classify observations to the correct class. We will use the AUC as a further way to compare models, as this is less influenced by class imbalances, this gives us an overall score reflecting the models ability to distinguish classes. 
+
+We now have our evaluation metrics, we can fit our models one by one and check their performance. We will provide a brief description of each model to explain how each one works.  
+
+\
+\
+
+
+
+#### K-nearest Neighbour Classification \
+
+KNN is a non-parametric, classifying algorithm. Instead it sets its decision boundary between groups by finding the 'K' nearest (normally by euclidean distance) training observations/neighbours, for any point in the output space, examine what group they are in and whichever group the majority of those 'K' neighbours is in, we assign the new point into that group. The K nearest neighbours are specifically the training observations, the test data is not counted as a new neighbour and therefore does not affect the classification process. KNN classifies new objects essentially by 'majority vote' of its 'K' nearest neighbours. The formula for KNN probability is:
+
+\[ 
+P(Y = j \mid X = x_0) = \frac{1}{K} \sum_{i \in N_0} 1_{(y_i = j)} 
+\]
+
+Which essentially says the probability of a new observation being in a certain class, given its set of explanatory variables, is how many of its K closest neighbours are in that class. Then by default, if the probability is over 0.5 (to try and replicate Bayes classifier, which is explained later) then KNN classifies that observation to that group. 
+
+The smaller our 'K', the more flexible our model will be, if $K = 1$ then our model will be extremely complex, reducing bias but greatly increasing variance. So clearly the value of 'K' is vital to the performance of KNN. We are essentially looking for a 'K' with the lowest estimated test error rate (highest accuracy). 
+
+To tune this hyperparameter of KNN we fit a range of different values for 'K' and check which one has the lowest test error. If we had multiple test sets then we could iteratively test each value of 'K' for each test set, however that is not normally the case. Therefore the method we use to choose 'K' is called k-fold cross validation (k-fold). This splits our training set into 'k' number of approximately equal folds, essentially splitting our training dataset into k number of subsets, with the first fold being used as a validation set (essentially a test set) and the model being trained on the remaining k-1 folds (the rest of the folds used as training data) to find the estimated error rate for each value of 'K'. Then, the next fold is used as the validation set, with all other folds (including the first) being used as the training data, with the error rate found for each value of 'K' (over a range). This process is repeated until each fold has been used as a validation set. The value of 'K' with the lowest average error rate over all folds is chosen as the optimal. To make k-folds insensitive to a single random partition we repeat the entire process a number of times, with a different splits of the data (therefore reducing variance). 
+
+We will now fit the model and evaluate its performance:
+
+```{r}
+# Repeat 10-fold cross-validation, 5 times
+opts <- trainControl(method='repeatedcv', number=10, repeats=5,
+                     classProbs = TRUE) # to enable probabilities predictions
+
+# training the model with the training dataset
+mdl.knn <- train(x=xTrain, y=yTrain, # training data
+method='knn', # setting the ml model we want to use
+trControl=opts, # training options
+tuneGrid=data.frame(k=seq(2, 20))) # range of k's to try
+
+# Printing the model outcome
+print(mdl.knn)
+```
+
+We can see that 'K' = 17 was the value with the highest accuracy, therefore this is the 'K' we will use for our model moving forward. Note we do not need to test any further values of 'K', due to the trade-off between bias and variance, increasing 'K' will not result in improvements in accuracy.
+
+So we have our fitted model with `k = 17`, we can now use the `predict` function with our test X data to get predictions of classifications. We then can put these into a confusion matrix with the correct classes for our test data to evaluate model performance. 
+
+```{r}
+# predicting categories using fitted knn based on test data
+yTestPred.knn <- predict(mdl.knn, newdata = xTest)
+
+# Combining the predicted and true classes (yTest)
+conf.knn <- confusionMatrix(yTestPred.knn, yTest)
+
+# Saving the metrics we want to use later in a new df
+accuracy    <- conf.knn$overall["Accuracy"]
+sensitivity <- conf.knn$byClass["Sensitivity"]
+specificity <- conf.knn$byClass["Specificity"]
+knn.results.df <- data.frame(Model = "K Nearest Neighbour",
+                             Accuracy = accuracy, 
+                             Sensitivity = sensitivity, 
+                             Specificity = specificity)
+
+# printing the confusion matrix for KNN
+conf.knn
+```
+
+Above we can see the overall accuracy (80.7%) of our final KNN model against the test data. 80% is generally considered a good model if the classes are balanced, however as we saw earlier, due to the fact of having twice as many class 1 observations as class 0, our model accuracy isn't as impressive as it may initially seem, only being 12% better than if the model always predicted class 1. In fact when we look at class specific metrics, the sensitivity is reasonably high (90%) but the specificity is much lower at 60.8%. This suggests actually our model doesn't have effectively classify negative (group 0) observations well at all, with the sheer number of class 1 observations causing our KNN model to over classify observations into class 1 (and therefore under-classify class 0). 
+
+We will now also look at the AUC, this will give us an overall score of the KNN model's discriminatory power, robust against the class imbalance in our dataset. We have to edit our previous code slightly to get the required probabilities needed to compute the ROC (and AUC).
+
+```{r, warning=FALSE}
+# For the ROC and AUC, we need to get estimated probabilities for group 1
+yTestProb.knn <- predict(mdl.knn, newdata = xTest, type = "prob")[, "Group1"]
+
+# Combine the true labels and estimated probabilities into a df for geom_roc
+df_class.knn <- data.frame(a=yTest, b=yTestProb.knn)
+
+# Now we can use ggplot and geom_roc to create ROC curve
+p.knn <- ggplot(df_class.knn,aes(d=a,m=b)) +
+geom_roc()
+
+# Now getting the Area Under the Curve (AUC)
+AUC.knn <- calc_auc(p.knn)$AUC
+
+# adding AUC to our df
+knn.results.df$AUC <- AUC.knn
+
+print(AUC.knn)
+```
+
+So we have calculated the AUC for our KNN model to be 0.881, which actually suggests our model has excellent discriminatory power. Such a high AUC (given our current model specificity of 0.608) suggests that the default classification threshold used by our model could be changed to better balance sensitivity and specificity. By default, KNN classifies new observations based on a majority vote, using a probability threshold of 0.5. Meaning for an observation to be classified as positive, at least half of its  k-nearest neighbors must belong to the positive class. This method aims to approximate the **Bayes classifier**, which theoretically achieves the lowest possible error rate (the Bayes error rate) by always assigning an observation to the class with the highest probability. However, alternative thresholds could be chosen, for example, classifying an observation as positive even if only 6 out of its 17 nearest neighbors are positive. This would shift the sensitivity–specificity trade-off. We will use this AUC along with the accuracy, specificity and sensitivity going forward when comparing against other models. 
+
+We will now move onto QDA.
+\
+
+\
+
+#### Quadratic Discriminant Analysis \ 
+
+QDA is a classification method which builds on LDA. It models probabilities that an observation belongs in a certain class by estimating the distribution of the predictors within each class and then, using Bayes theorem, finds the posterior probability of belonging in a certain class, given the predictors:
+
+
+$$
+P(Y = k \mid X = x) = \frac{\pi_k f_k(x)}{\sum_{j=1}^{K}\pi_j f_j(x)}
+$$
+
+Where:
+
+- \(P(Y = k \mid X = x)\) is the **posterior probability** that observation \(X = x\) belongs to class \(k\).
+- \(\pi_k\) is the **prior probability** of class \(k\). This is estimated by the proportion of training observations belonging to the kth class.  
+- \(f_k(x)\) is the **probability density** of \(X\) given class \(k\).
+
+As QDA is an approximation of the Bayes classifier, there once it has these posterior probabilities, it assigns observations into the class with the highest probability (thereby maximising the accuracy/minimising the error rate). However the probability threshold can be manipulated depending on the real world scenario (disease diagnosis may reduce the threshold to favour positive diagnosis as false negatives could be catastrophic).
+
+QDA has an important underlying assumption of predictor normality:
+
+* Predictor **normality** - predictors $f_k(x)$ follow a normal distribution with a class specific mean $\mu_k$ ($\mu_k$ is estimated by averaging all of the training observations from the kth class, $\hat{\mu}_{k} = \frac{1}{n_{k}} \sum_{i : y_{i} = k} x_{i}$). 
+
+* Each kth class its own covariance matrix (this is where QDA differs from LDA which assumes shared variance across classes), this allows the decision boundary estimated by QDA to be non linear, specifically it is quadratic, which is more appropriate for our data. Note we have enough observations to estimate the variances for our two groups.
+
+We have roughly checked our X's are approximately normally distributed within each class and have seen that the variances are different (through the standard deviations and means found earlier) therefore satisfying the assumptions necessary for QDA. We can now go ahead and fit the model. 
+
+```{r}
+# We need to save our training predictors and classes as a new df
+train.df <- data.frame(xTrain, yTrain)
+
+# Now we can fit the QDA model
+fit.qda <- qda(yTrain~X1+X2, data = train.df)
+
+#printing the model summary
+fit.qda
+```
+Here we have summaries of our data, which unsurprisingly reflects the summary statistics of the overall dataset we found earlier. So we now move onto using our model for prediction. 
+
+```{r}
+# Predicting classes with our QDA model
+qda.predict <- predict(fit.qda, newdata = xTest)
+
+# Getting the confusion matrix
+conf.qda <- confusionMatrix(qda.predict$class, yTest)
+
+# Saving all the required metrics in a df for later
+accuracy    <- conf.qda$overall["Accuracy"]
+sensitivity <- conf.qda$byClass["Sensitivity"]
+specificity <- conf.qda$byClass["Specificity"]
+qda.results.df <- data.frame(Model = "Quadratic Discriminant Analysis",
+                             Accuracy = accuracy, 
+                             Sensitivity = sensitivity, 
+                             Specificity = specificity)
+
+# Displaying the confusion matrix
+conf.qda
+
+```
+
+We can see from the confusion matrix resulting from our QDA model that the accuracy appears relatively high, being 81.5%, but again this is likely inflated given our class imbalance. More usefully, the sensitivity is extremely high at 95.3%, suggesting our QDA model is very good at correctly identifying group 1 observations. However the specificity is very low, at 51.9%, meaning our model is barely better than random chance for identifying group 0 observations. Our QDA model is excellent at identifying positive (group 1) observations, but very poor at accurately identifying negatives. We will now check the model AUC to see how good the overall model is. Luckily for us the posterior probabilities are automatically calculated when we used our the `predict` function with QDA. 
+
+```{r, warning=FALSE, out.width='100%'}
+# Combine the true labels and estimated probabilities into a df for geom_roc
+df_class.qda <- data.frame(a=yTest, b=qda.predict$posterior[, "Group1"])
+
+# Now we can use ggplot and geom_roc to create ROC curve
+p.qda <- ggplot(df_class.qda,aes(d=a,m=b)) +
+           geom_roc() +
+           ylab('sensitivity') +
+           xlab('1-specificity') +
+           labs(title = "ROC for QDA model",
+             caption = "Figure 9: ROC for our QDA model, shows tradeoff between sensitivity and specificty at different probability thresholds") +
+           theme_minimal()
+
+# Displaying the ROC
+p.qda
+
+```
+\
+In Figure 9, we actually display the ROC for our QDA model, this shows how different probability thresholds for positive classifications affect the sensitivity-specificity balance. For a model which is balances the two metrics as best as possible, we would want the threshold closest to the (0,1) point on the grid, which looks like 0.7. We will now get the AUC. 
+
+```{r, warning=FALSE}
+# Now getting the Area Under the Curve (AUC)
+AUC.qda <- calc_auc(p.qda)$AUC
+
+# adding AUC to df
+qda.results.df$AUC <- AUC.qda
+
+print(AUC.qda)
+```
+
+We have an AUC of 0.885 which is excellent, suggesting our overall QDA model's discriminatory power is very good when considered over all possible thresholds. 
+
+We will now move onto RF. 
+\
+
+#### Random Forests \
+
+To explain how RF works, we need to briefly explain decision trees and bagging as these concepts are the basis for RF. 
+
+Decision trees segment the predictor (X1 - X2 in our case) space into simpler, distinct regions and make predictions by assigning each region a specific output (majority class for the purposes of classification). Basically once the predictor space has been split up, to predict a new observation, we just take the majority class of all the training observations from the same region as the new observation. The way the space is partitioned (for the purposes of this model) is by using the top-down greedy approach (also known as recursive binary splitting):
+
+* Top down - all observations start in one region and from there we iteratively split the predictor space up, with each split being a further branch in the tree. Only one line/space is split at a time. 
+* Greedy - each step looks to maximise the reduction in the error rate (or impurity measure such as Gini index) at that particular step, without considering the effect this might have on future splits further down the tree. 
+We call these "decision trees" as each split can be seen as branches/roots in the tree. They can be easy to visualise and explain to other people.
+We grow our tree very deep initially and then prune it back to try and overcome the issue of over-fitting. However even then, decision trees can still suffer from high variance, as the training data can have a very large impact on the shape and structure of our tree. 
+
+Bagging is an extension on bootstrapping, where you take repeated samples **with replacement** from your training set to create new training sets so you can increase the number of training sets you can use. Then we construct decision trees for each training set. Each tree is grown quite deep, without being pruned, therefore have high variance but low bias. We then average the results of the trees in an attempt to reduce variance. For classification we can take the average probability that an observation belongs to a certain class (out of all the trees, how many classify that observation in a particular class). As each bootstrapped subset contains on average 2/3 of the training observations, we end up having 1/3 for testing, we call these 'out-of-bag' observations. We can use this to get a estimated test error rate. So as we have an average of low bias trees, the benefit of decision trees is low bias and low variance (through averaging, as variance of an average is variance/n with n being the number of bootstrapped training sets).
+
+RF is an ensemble method, building further on these concepts by adding a final step, when constructing each decision tree for the bootstrapped datasets, only a random subset of predictors are considered at each split (the number of predictors considered is normally $m \approx \sqrt p$). This is done to reduce correlation between trees, as if one predictor is especially strong, then it is likely almost all our trees will use this predictor for the first split. So our bagged trees might all look similar - highly correlated. An average of correlated trees actually wouldn't reduce variance, therefore RF overcomes this issue by the random restriction of predictors at each split. 
+
+A potential negative of using RF is that the once easily interpretable decision tree becomes a much less clear aggregation of many trees, less easily visualised. However we can get an overall summary of the importance of each predictor by using "Relative Influence Plots", which represents the importance each predictor for splitting. However for our purposes we do not require a fully interpretable model. 
+
+We will now fit an RF model to classify our data. 
+
+```{r}
+# Fit our random forest model
+mdl.rf <- train(x=xTrain, y=yTrain,
+method='rf',
+ntree=500, # we set the number of trees/bootstrapped sets to 500
+# as we only have 2 predictors, we set this to 1 (sqrt2 rounds down to 1), otherwise it would essentially just be bagging. 
+tuneGrid=data.frame(mtry=1)) 
+
+# print the model summary
+print(mdl.rf)
+```
+We can see that the accuracy for our RF model is 79.4%, which is still good however as mentioned earlier, with the unbalanced class sizes it diminishes this slightly. We now will look at class specific metrics:
+
+```{r, warning=FALSE}
+# We test the model on test data
+yTestPred.RF <- predict(mdl.rf, newdata = xTest)
+
+# Use this in our confusion matrix
+conf.rf <- confusionMatrix(yTestPred.RF, yTest)
+
+# Saving all the required metrics in a df for later
+accuracy    <- conf.rf$overall["Accuracy"]
+sensitivity <- conf.rf$byClass["Sensitivity"]
+specificity <- conf.rf$byClass["Specificity"]
+rf.results.df <- data.frame(Model = "Random Forest", Accuracy = accuracy, 
+                             Sensitivity = sensitivity, 
+                             Specificity = specificity)
+
+conf.rf
+```
+
+We can see from the results of the confusion matrix that our model is reasonably good at predicting positive classes correctly with a sensitivity of 86.47% but much worse at identifying negative classes correctly (only 63.3% specificity). We will now look at the AUC to check whether this provides any further insights. 
+```{r, warning=FALSE}
+# We have to explicitly get the probabilities from our model same as KNN
+yTestProb.rf <- predict(mdl.rf, newdata = xTest, type = "prob")[, "Group1"]
+
+# Combine probabilities and true classes in df
+df_class.rf <- data.frame(a = yTest, b = yTestProb.rf)
+
+# Create the ROC curve using ggplot and geom_roc
+p.rf <- ggplot(df_class.rf, aes(d = a, m = b)) +
+  geom_roc()
+
+# Calculate the AUC from the ROC curve
+AUC.rf <- calc_auc(p.rf)$AUC
+
+# adding onto rf df
+rf.results.df$AUC <- AUC.rf
+
+# printing the AUC
+print(AUC.rf)
+
+```
+
+We get an AUC value of 0.872, suggesting our model has very good discriminatory power over all thresholds. 
+
+Finally we will look at SVMs.
+
+\
+
+#### Support Vector Machines \ 
+
+SVMs build on two less complex classifiers: 
+
+* Maximal Margin Classifiers - try to find an optimal line/hyperplane that separates classes so that the margin, the gap between the nearest data points of each class (these closest points are called **support vectors**) is maximised. Classes must be linearly separable.  
+* Support Vector Classifiers - When there is overlap between classes, then the hyperplane is positioned so that most of the points are correctly classified. Slack variables are introduced, to allow some observations to lie within the margin boundary. This introduces a tuning parameter (cost, "C") which is a constant that controls the impact of slack variables, this parameter balances the bias-variance trade off, if C is large then the cost of miss-classification is higher leading to a tighter fit (narrower boundary) but may lead to overfitting, meaning low bias high variance, and vice versa if C was small.  
+
+SVM extends this by using kernels to deal with non-linearly separable classes (as we have with our data). Kernels map the original predictors into a space where they can be linearly separable. So SVMs still classify using a linear decision boundary, instead the predictors are transformed. The choice of kernel is the hyperparameter for this model, and therefore we will look at tuning this by testing two, the Polynomial and the Radial Basis kernels. We could use k-folds cross validation to find the optimal C, along with the other tuning parameters for the individual kernels (such as scale or degree for polynomial) however the `svm` function does find some parameters automatically. (*Note: degree, scale and cost were initially going to be tuned for the model however the cross validation process was taking too long)
+
+A potential downside of SVMs are they are not very interpretable, especially with kernels being used. 
+
+We start with Polynomial as there is no point checking the linear kernel as our decision boundary is clearly not linear. 
+
+```{r, message=FALSE}
+# We set up the model using the svm function
+
+# Use cross validation to find the tuning parameters for poly svm
+mdl.svm.poly <- train(x=xTrain,y=yTrain, method = "svmPoly",
+# we don't use repeated cv as code took too long to run
+trControl = trainControl("cv", number = 5, classProbs = TRUE), 
+tuneGrid = expand.grid(degree = c(2, 3),
+                       scale = c(0.1, 3, 5), 
+                       C = seq(0.01, 2, length = 10)))
+
+mdl.svm.poly
+```
+So our optimised polynomial model is using 2nd degree polynomial for the kernel, with a scale value of 3 and cost of 0.23. We can now get the accuracy of the polynomial SVM.
+
+```{r}
+# Test model on testing data
+yTestPred.poly <- predict(mdl.svm.poly, newdata= xTest)
+
+# combine with actual classes for confusion matrix
+conf.poly <- confusionMatrix(yTestPred.poly, yTest)
+
+conf.poly
+```
+
+So the polynomial SVM has a relatively decent accuracy at  79.92%. It has excellent ability to predict positive class observations correctly with a sensitivity of 0.89, exceptionally high. But then has a low specificity of 0.595, suggesting poor ability to identify negative classes correctly. We will now try the radial kernel to see if this is better. The extra tuning parameter for the radial is "sigma". 
+
+```{r}
+# fitting the model with radial kernel
+mdl.svm.radial <- train(x=xTrain,y=yTrain, method = "svmRadial",
+# we don't use repeated cv as code took too long to run                       
+trControl = trainControl("cv", number = 5, classProbs = TRUE), 
+tuneGrid = expand.grid(sigma = seq(0.01, 1, length = 10), 
+                       C = seq(0.01, 2, length = 10)))
+
+# Test model on testing data
+yTestPred.radial <- predict(mdl.svm.radial, newdata= xTest)
+
+# combine with actual classes for confusion matrix
+conf.radial <- confusionMatrix(yTestPred.radial, yTest)
+
+conf.radial
+```
+As we can see the accuracy has reduced slightly to 79.52% from the polynomial case, alongside this the specificity has also decreased to 0.54, suggesting the SVM with a radial kernel is worse at correctly identifying group 0 observations. The Sensitivity has stayed roughly the same at 91% which suggests it is still in a good range for identifying positive observations. Therefore we will use the polynomial as our final kernel for the SVM.
+
+```{r}
+# Saving all the required metrics in a df for later
+accuracy    <- conf.poly$overall["Accuracy"]
+sensitivity <- conf.poly$byClass["Sensitivity"]
+specificity <- conf.poly$byClass["Specificity"]
+svm.results.df <- data.frame(Model = "Support Vector Machine",
+                             Accuracy = accuracy, 
+                             Sensitivity = sensitivity, 
+                             Specificity = specificity)
+
+```
+
+We will now have a look at the AUC. 
+
+```{r, warning=FALSE}
+# predict but with probabilities enabled
+yTestProb.poly <- predict(mdl.svm.poly, newdata = xTest, type = "prob")[, "Group1"]
+
+
+# Combine the true labels and estimated probabilities into a df for geom_roc
+df_class.svm <- data.frame(a=yTest, b=yTestProb.poly)
+
+# Now we can use ggplot and geom_roc to create ROC curve
+p.svm <- ggplot(df_class.svm,aes(d=a,m=b)) +
+geom_roc()
+
+# Now getting the Area Under the Curve (AUC)
+AUC.svm <- calc_auc(p.svm)$AUC
+
+# adding AUC to our df
+svm.results.df$AUC <- AUC.svm
+
+print(AUC.svm)
+
+```
+
+We have an AUC of 0.886 which is very good, suggesting our SVM model with a radial kernel has good discriminatory ability over all thresholds. 
+
+\
+\
+
+### 4. \ 
+
+Now we have the results from our models, we can combine them into a table and compare which one we think is the best. 
+
+```{r, out.width='100%'}
+# Combining the dataframes for each model:
+final.df <- rbind(knn.results.df, qda.results.df, rf.results.df, svm.results.df)
+
+# Putting the results into a model
+models.table <- gt(final.df, rowname_col = "Model") %>%
+  tab_stubhead(label = 'Model') %>%
+  tab_header(title = 'Comparison Metrics for Final Models') %>%
+  tab_footnote(footnote = 'Figure 10: Final comparison values for our models') %>%
+  cols_width(stub() ~ px(100)) %>%
+  fmt_number(columns = c("Accuracy", "Sensitivity", "Specificity", "AUC"),                             decimals = 3) %>%
+  tab_style(style = cell_text(weight = "bold"), 
+           locations = cells_column_labels()) %>%
+  tab_style(style = cell_text(weight = "bold"), 
+            cells_title(groups = 'title')) %>%
+  tab_style(style = cell_text(weight = "bold"),
+            locations = cells_stub()) %>%
+  tab_style(style = cell_text(weight = "bold"),
+            locations = cells_stubhead())
+
+models.table
+```
+
+Here we have our final table showing all the metrics for each model we can compare them. All of our AUC values are reasonably high and very similar, unfortunately meaning they do not allow us to distinguish the models based on this. We therefore will look at accuracy and class based metrics, as depending on the scenario, these would be the most useful. 
+
+**QDA** has the highest accuracy, so if our primary goal was to correctly identify as many observations as possible, this would be the one to chose. It also has the highest sensitivity, meaning it's also best at detecting group 1 (positive) observations. This could be very important if our objective was to identify something like cancer diagnosis, as missing a true positive could have significant issues, with increased false positives being a worthwhile trade-off in this scenario. However it also has the lowest specificity, so it miss-classifies many negatives as positives. 
+
+If a false positive could lead to an invasive biopsy or expensive procedure, then our QDA would not be ideal at all. In this case the **KNN** would be a better choice, with the second highest sensitivity it also has the second highest specificity (and accuracy). It balances both the ability to identify positive observations and negative observations correctly, at least relatively out of our models. 
+
+If false positives are deemed extremely costly and this is the priority, then the **RF** model has the highest specificity making this the choice. 
+
+The **SVM** model is reasonably balanced with the highest AUC (but not by much) however it does not offer any advantages in terms of classification above the other models. 
+
+As we do not know the exact objective for our classification models, we chose the **KNN** model as this has the best balance of sensitivity and specificity. **RF** would also be a suitable choice as it is also reasonably balanced in these aspects. But note all our models were relatively poor at correctly classifying negative observations. This is likely due to the fact that group 1 had so many more observations than group 0 in our dataset and our classifiers approximating the Bayes classifier, therefore choosing parameters that solely reduced error rate. As we have good AUC values for each model, it is safe to assume that specificity could be improved if our classification thresholds were adjusted.
+
+\
+
+
+### 5. \
+
+We will now use the true classifications without any noise to see how well our models performed and how influenced they were by the noise in the original data set. 
+
+```{r}
+# Loading in the dataframe without the noise
+true.df <- read.csv("ClassificationTrue.csv")
+
+# splitting as we did before
+# Split test/train
+set.seed(12345) # for reproducibility
+ii <- createDataPartition(true.df[, 4], p=.75, list=F) ## returns indices for train data
+
+# split the data using the indices returned by the createDataPartition function
+xTrain2 <- true.df[ii, 2:3] # predictors for training
+yTrain2 <- true.df[ii, 4] # class label for training
+xTest2 <- true.df[-ii, 2:3] # predictors for testing
+yTest2 <- true.df[-ii, 4] # class label for testing
+
+# swapping the factor levels so 1 is the positive class (making sensitivity and specificity more clear/ as is general practice)
+# Had to set labels so the predict probability would work later on in the code
+yTrain2 <- factor(yTrain2, levels = c("1", "0"), labels = c("Group1", "Group0"))
+yTest2 <- factor(yTest2, levels = c("1", "0"), labels = c("Group1", "Group0"))
+
+```
+
+We will test the models on the correct labels now and get confusion matrices for each model to see how this has changed.
+We will combine all the model stats into a table before we discuss them:
+
+```{r}
+# We start with KNN, using the new data to predict
+yTestPred.knn2 <- predict(mdl.knn, newdata = xTest2)
+
+# Combining the predicted and true classes (yTest)
+conf.knn2 <- confusionMatrix(yTestPred.knn2, yTest2)
+
+accuracy    <- conf.knn2$overall["Accuracy"]
+sensitivity <- conf.knn2$byClass["Sensitivity"]
+specificity <- conf.knn2$byClass["Specificity"]
+knn2.results.df <- data.frame(Model = "K Nearest Neighbour",
+                              Accuracy = accuracy, 
+                             Sensitivity = sensitivity, 
+                             Specificity = specificity)
+
+
+# Now QDA, we do the same thing
+qda.predict2 <- predict(fit.qda, newdata = xTest2)
+
+# Getting the confusion matrix
+conf.qda2 <- confusionMatrix(qda.predict2$class, yTest2)
+
+# Saving all the required metrics in a df for later
+accuracy    <- conf.qda2$overall["Accuracy"]
+sensitivity <- conf.qda2$byClass["Sensitivity"]
+specificity <- conf.qda2$byClass["Specificity"]
+qda2.results.df <- data.frame(Model = "Quadratic Discriminant Analysis",
+                             Accuracy = accuracy, 
+                             Sensitivity = sensitivity, 
+                             Specificity = specificity)
+
+
+# Now RF
+# We test the model on the new test data
+yTestPred.RF2 <- predict(mdl.rf, newdata = xTest2)
+
+# Use this in our confusion matrix
+conf.rf2 <- confusionMatrix(yTestPred.RF2, yTest2)
+
+# Saving all the required metrics in a df for later
+accuracy    <- conf.rf2$overall["Accuracy"]
+sensitivity <- conf.rf2$byClass["Sensitivity"]
+specificity <- conf.rf2$byClass["Specificity"]
+rf2.results.df <- data.frame(Model = "Random Forest", Accuracy = accuracy, 
+                             Sensitivity = sensitivity, 
+                             Specificity = specificity)
+
+
+# Finally SVM
+yTestPred.poly2 <- predict(mdl.svm.poly, newdata= xTest2)
+
+# combine with actual classes for confusion matrix
+conf.poly2 <- confusionMatrix(yTestPred.poly2, yTest2)
+
+accuracy    <- conf.poly2$overall["Accuracy"]
+sensitivity <- conf.poly2$byClass["Sensitivity"]
+specificity <- conf.poly2$byClass["Specificity"]
+svm2.results.df <- data.frame(Model = "Support Vector Machine",
+                             Accuracy = accuracy, 
+                             Sensitivity = sensitivity, 
+                             Specificity = specificity)
+
+# Saving all into one df and producing a table
+# Combining the dataframes for each model:
+final.df2 <- rbind(knn2.results.df, qda2.results.df, rf2.results.df, svm2.results.df)
+
+# Putting the results into a model
+models.table2 <- gt(final.df2, rowname_col = "Model") %>%
+  tab_stubhead(label = 'Model') %>%
+  tab_header(title = 'Final Comparison Metrics for Models - True Classes') %>%
+  tab_footnote(footnote = 'Figure 11: Final comparison values for our models with the true classification labels') %>%
+  cols_width(stub() ~ px(100)) %>%
+  fmt_number(columns = c("Accuracy", "Sensitivity", "Specificity"),                             decimals = 3) %>%
+  tab_style(style = cell_text(weight = "bold"), 
+           locations = cells_column_labels()) %>%
+  tab_style(style = cell_text(weight = "bold"), 
+            cells_title(groups = 'title')) %>%
+  tab_style(style = cell_text(weight = "bold"),
+            locations = cells_stub()) %>%
+  tab_style(style = cell_text(weight = "bold"),
+            locations = cells_stubhead())
+
+models.table2
+
+```
+
+From Figure 11, we see a significant improvement in all models using the true classifications, particularly in specificity. SVM clearly emerges as the top performer, with the highest accuracy (92%), second-highest sensitivity (95.7%), and the highest specificity (82.8%). This suggests the SVM model was most affected by noise in the original dataset and performed best when noise was removed. 
+
+
+
+
+
+
+
+
