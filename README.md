@@ -16,3 +16,22 @@ This project contains my **Advanced Topics in Statistics** coursework, demonstra
 - Applied **cross-validation** (caret) and visualised **ROC curves** with `plotROC`.
 
 ## 🧩 Repo Structure
+data/            # given data for coursework
+notebooks/       # main .Rmd analysis
+reports/         # coursework PDF
+
+## How to Run (Reproducibility)
+**R / RStudio**
+```r
+install.packages(c(
+  "ggplot2","dplyr","tidyr","gt","psych","caret","class",
+  "plotROC","MASS","e1071","randomForest","R2jags",
+  "MCMCvis","coda","lattice","kernlab"
+))
+# Open notebooks/supervised_learning_classification_bayesian_inference.Rmd
+# Knit or run top-to-bottom
+
+Findings (headline bullets)
+	•	Bayesian: posterior summaries separate groups meaningfully; diagnostics (trace/GR) acceptable.
+	•	Classification: KNN/QDA competitive; AUCs ~0.88–0.89 on the provided dataset; RF/SVM comparable.
+	•	Reproducibility: single .Rmd runs end-to-end; dependencies listed above.
